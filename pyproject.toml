@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt-qwen36"
+version = "0.1.0"
+description = "Qwen3.6-35B-A3B on one Tenstorrent Blackhole p100a, with an OpenAI- and Anthropic-compatible server"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+# ttnn (tt-metal 58648d4) and torch come from the tt-metal environment; ttnn is not on PyPI.
+dependencies = ["jinja2", "safetensors", "huggingface_hub", "numpy", "regex"]
+
+[project.scripts]
+tt-qwen36-server = "tt_qwen36.server:main"
+
+[tool.setuptools.packages.find]
+include = ["tt_qwen36*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.cpp", "*.hpp", "*.txt"]

@@ -1,0 +1,49 @@
+tt-qwen3.6-35b-a3b-p100a
+Copyright 2026 Sunbin Kim
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE). It is a single-card Tenstorrent
+Blackhole p100a port of Qwen3.6-35B-A3B. It combines original code with code and formulas derived from the
+third-party projects listed below.
+
+----------------------------------------------------------------------------------------------------------------------
+Model weights
+----------------------------------------------------------------------------------------------------------------------
+
+* Qwen3.6-35B-A3B, Copyright (c) 2026 the Qwen team (Alibaba Cloud), Apache License 2.0.
+  https://huggingface.co/Qwen/Qwen3.6-35B-A3B
+
+* Lottolabs/Qwen3.6-35B-A3B-TT-Mixed-BFP4-BFP8-P150 (Apache License 2.0), a Tenstorrent-native GPTQ BFP4/BFP8
+  checkpoint derived from Qwen3.6-35B-A3B. It is the base weight source of this port, downloaded from the Hugging
+  Face Hub at revision c355c41d4fd079c6df3c4ba9bab1c40f37c17f09 and not redistributed by the code repository.
+
+* BFP8 upgrade layers (the `bfp8/` directory of the model repository, when present). These 272 files are derived
+  from the BF16 weights of Qwen/Qwen3.6-35B-A3B at revision 995ad96eacd98c81ed38be0c5b274b04031597b0: the routed and
+  shared experts of the down projections of layers 30-39 and of the MTP layer, and of the gate/up projections of
+  layers 36-39 and of the MTP layer, converted round-to-nearest to Tenstorrent bfloat8_b by tools/convert_bfp8.py
+  (included). They are modified versions of the Qwen weights and are distributed under the same Apache License 2.0.
+  tt_qwen36/bfp8_sha256.txt lists their SHA-256 checksums.
+
+----------------------------------------------------------------------------------------------------------------------
+Code
+----------------------------------------------------------------------------------------------------------------------
+
+* sjettTT/tt-qwen-3.8-flash-next (Apache License 2.0), commit 79472f41. A ttnn port of Qwen3.8-Flash-Next. Its CPU
+  oracle and ttnn op sequences were the recipe for the gated-delta-net (GDN), gated attention, MoE and MTP device
+  code this port grew from (tt_qwen36/kgdn.py, kkv.py, prefix.py, sessions.py, and their Qwen3.6 versions in
+  tt_qwen36/q36/).
+
+* Lottolabs Qwen3.6-35B-A3B runtime sources (Apache License 2.0), shipped with the checkpoint above. The fixed-point
+  exp table and polynomial of the on-card routing kernels (tt_qwen36/q36/kernels/route.cpp, route_rows.cpp) follow
+  its routing_math.hpp / topk_routing.cpp; the compact MTP draft head follows its QWEN36_MTP_DRAFT_VOCAB idea; the
+  MTP layer formula was checked against its runtime source.
+
+* Strata (MIT License), Copyright (c) 2026 Niko1221 and the Strata contributors, version 0.2.12 (build 0.1.58).
+  tt_qwen36/ref/third_party/strata_tokenizer.py is copied from Strata (tools/strata_tokenizer.py) with its original
+  MIT notice in the file header. The MIT License text is in third_party_licenses/Strata-MIT.txt.
+
+* tt-metal / ttnn (Apache License 2.0), Copyright Tenstorrent AI ULC, commit
+  58648d44443223041148125843ca7c7d4780463e (tag v0.80.0-dev20260921). This project is a client of ttnn; its device
+  kernels are written against the tt-metal kernel API. The container image built from tt-model.yaml contains a
+  build of tt-metal at that commit and tt-metal's models/common directory (with tt-metal's own LICENSE and NOTICE).
+
+No code from ggml or llama.cpp is included.

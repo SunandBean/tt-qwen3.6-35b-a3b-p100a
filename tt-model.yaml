@@ -1,0 +1,101 @@
+schema: "5.1"
+repo: sunandbean/qwen3.6-35b-a3b-p100a
+name: qwen3.6-35b-a3b-p100a
+# Base weights: Lottolabs' Tenstorrent-native GPTQ BFP4/BFP8 checkpoint (Apache-2.0), pinned. Only checkpoint/ is used
+# (~21 GB); the repo also carries a 5.5 GB runtime image and evaluation evidence that this server never reads.
+# The BFP8 upgrade layers (6.0 GB, on by default) are NOT this pointer: they are bfp8/ in this package's own repo and
+# the server fetches them on first start (tt_qwen36/weights.py; Q36_BFP8_SOURCE below).
+weights:
+  repo: Lottolabs/Qwen3.6-35B-A3B-TT-Mixed-BFP4-BFP8-P150
+  revision: c355c41d4fd079c6df3c4ba9bab1c40f37c17f09
+  allow_patterns:
+    - "checkpoint/*"
+    - "LICENSE"
+    - "README.md"
+kind: http-server
+arch: blackhole
+
+image:
+  registry: hf
+
+source:
+  # 58648d4 = tag v0.80.0-dev20260921, the tt-metal every measurement on the model card was taken on
+  tt_metal: {repo: https://github.com/tenstorrent/tt-metal, ref: 58648d44443223041148125843ca7c7d4780463e}
+  code:
+    # tt-model needs at least one path from the tt-metal tree; models/common is what the other p100a ports ship.
+    # The server does not import it.
+    - models/common
+  extra_code:
+    - root: {repo: https://github.com/SunandBean/tt-qwen3.6-35b-a3b-p100a, ref: v0.1.0}
+      paths: [tt_qwen36, tools]
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  command: [python, -m, tt_qwen36.server, --host, "{host}", --port, "{port}"]
+  ready_line: '"event": "ready"'
+  packages:
+    - jinja2
+    - safetensors
+    - huggingface_hub
+    - regex                 # the tokenizer's pre-tokenizer
+
+serve:
+  port: 8000
+  hardware: p100a
+  mesh_device: P100
+  env:
+    ARCH_NAME: blackhole
+    # BFP8 upgrade layers: hf (default; bfp8/ of this repo) | dir (Q36_BFP8_DIR) | bf16 (convert locally from the
+    # Qwen BF16 original, ~67 GB download) | off (Lottolabs GPTQ BFP4 only; needed for --ctx 262144)
+    Q36_BFP8_SOURCE: hf
+    # After bfp8/ is uploaded, pin the commit that added it here (the files are also checked against
+    # tt_qwen36/bfp8_sha256.txt, so "main" only decides where they are fetched from, not what is accepted).
+    Q36_BFP8_REVISION: main
+
+serve_profiles:
+  - name: default
+    description: 32k context, up to 4 users (time slicing with MTP for 1-2, batched decode for 3-4), prefix cache.
+  - name: long-128k
+    description: 131,072-token context, one request at a time.
+    args: [--ctx, "131072", --batch, "0", --prefix-slots, "1", --max-concurrent, "1"]
+  - name: long-262k
+    description: 262,144-token context, one request at a time, without the BFP8 upgrade layers (they do not fit).
+    args: [--ctx, "262144", --batch, "0", --prefix-slots, "0", --max-concurrent, "1"]
+    env:
+      Q36_BFP8_SOURCE: "off"
+default_profile: default
+
+verify:
+  # import EVERY module (several are imported lazily at start-up, so a missing dependency would otherwise only show
+  # on a consumer's first boot)
+  - "import tt_qwen36.server, tt_qwen36.api, tt_qwen36.chat, tt_qwen36.sessions, tt_qwen36.prefix, tt_qwen36.kkv, tt_qwen36.kgdn, tt_qwen36.bfp4"
+  - "import tt_qwen36.q36.model, tt_qwen36.q36.spec, tt_qwen36.q36.batch, tt_qwen36.q36.bsched, tt_qwen36.q36.kgdn, tt_qwen36.q36.kmoe"
+  - "import tt_qwen36.ref.q36_tok, tt_qwen36.ref.q36_weights, tt_qwen36.ref.third_party.strata_tokenizer"
+  - "import tt_qwen36.weights as w; assert w.LOTTO_REVISION and len(w.checksums()) == 272"
+  - "import jinja2, safetensors, huggingface_hub, regex"
+
+card:
+  description: >
+    Qwen3.6-35B-A3B (35B total / 3B active MoE, 256 experts, gated delta net + gated attention, MTP head) served
+    entirely from one Tenstorrent Blackhole p100a card, with an OpenAI- and Anthropic-compatible API (chat
+    completions, responses, messages, tool calls, streaming). Base weights: Lottolabs' GPTQ BFP4/BFP8 checkpoint
+    (Apache-2.0), plus 6.0 GB of BFP8 upgrade layers converted from the Qwen BF16 original.
+  quickstart: |
+    ### Requests
+
+    The server is OpenAI- and Anthropic-compatible; the model id is `qwen3.6-35b-a3b-p100a`.
+
+    ```bash
+    curl -s localhost:20000/v1/chat/completions -H 'Content-Type: application/json' \
+      -d '{"model":"qwen3.6-35b-a3b-p100a","messages":[{"role":"user","content":"Hello!"}],"max_tokens":200}'
+    curl -s localhost:20000/v1/messages -H 'Content-Type: application/json' -H 'anthropic-version: 2023-06-01' \
+      -d '{"model":"qwen3.6-35b-a3b-p100a","max_tokens":200,"messages":[{"role":"user","content":"Hello!"}]}'
+    ```
+
+    The first start downloads the 6.0 GB of BFP8 upgrade layers (`bfp8/` of this repo) into your HF cache and
+    compiles kernels; later starts take about 35 s. `Q36_BFP8_SOURCE=off` serves with the Lottolabs weights only.
+  limitations: |
+    - One p100a only (mesh 1x1); no multi-card scaling.
+    - 262k context only without the BFP8 upgrade layers (profile `long-262k`); BFP8 KV cache is not supported.
+    - Prompt reading slows with length (590 tok/s at 50 tokens, ~170 tok/s at 110k, 123 tok/s at 184k).

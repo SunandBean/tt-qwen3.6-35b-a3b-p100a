@@ -5,7 +5,6 @@ tags:
 - tenstorrent
 - ttnn
 - tt-metal
-- tt-model-catalog
 - tt-nn
 - text-generation
 - moe

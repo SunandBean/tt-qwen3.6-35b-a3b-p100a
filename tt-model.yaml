@@ -95,7 +95,42 @@ card:
 
     The first start downloads the 6.0 GB of BFP8 upgrade layers (`bfp8/` of this repo) into your HF cache and
     compiles kernels; later starts take about 35 s. `Q36_BFP8_SOURCE=off` serves with the Lottolabs weights only.
+  architecture: Qwen3.6-35B-A3B MoE (gated delta net + gated attention, 256 experts top-8 + shared, MTP), all on one card
+  status: community port; tested end to end on one p100a (tt-model serve, OpenAI + Anthropic requests)
+  performance: |
+    Measured 2026-11-13/14 on one idle p100a through the HTTP server, default profile (BFP8 upgrade layers on, MTP
+    speculative decoding with up to 3 drafts, adaptive draft count), greedy.
+
+    | | chat | code | doc |
+    |---|---:|---:|---:|
+    | decode, one user (tok/s) | 81.9 | 105.9 | 88.7 |
+    | MTP draft acceptance | 0.51 | 0.73 | 0.57 |
+    | prompt reading, 40-60-token prompts (tok/s) | 566 | 500 | 590 |
+
+    | users at once | 1 | 2 | 3 | 4 |
+    |---|---:|---:|---:|---:|
+    | total decode tok/s (time slicing for 1-2, batched decode for 3-4) | 106.7 | 95.2 | 91.2 | 112.4 |
+
+    Quality, teacher-forced on 1,532 positions against a float32 run of the original BF16 Qwen3.6-35B-A3B:
+    **KL 0.0130, top-1 agreement 0.971** with the BFP8 upgrade layers (default); 0.0173 / 0.963 with Lottolabs'
+    GPTQ BFP4 experts only (`Q36_BFP8_SOURCE=off`). GSM8K, first 50, max 2,048 tokens: **49/50**.
+
+    Long context (needle in a haystack, passkey at half depth): found at 14k / 60k / 110k tokens with
+    `--ctx 131072` (prompt read in 38 / 250 / 655 s), and at 184k tokens with `--ctx 262144` and the upgrade layers
+    off (1,497 s, 123 tok/s prompt reading). Decode on a short prompt: 105-107 tok/s at `--ctx 131072`, 117.8 tok/s
+    at `--ctx 262144` (upgrade off).
+
+    From this package (`tt-model serve`, fresh caches, cold kernel cache, 2026-11-14): ready in 1 min 20 s;
+    one OpenAI chat request at 84 tok/s decode. Weights on the card: 23.75 GB (20.91 GB with the upgrade off).
   limitations: |
     - One p100a only (mesh 1x1); no multi-card scaling.
     - 262k context only without the BFP8 upgrade layers (profile `long-262k`); BFP8 KV cache is not supported.
-    - Prompt reading slows with length (590 tok/s at 50 tokens, ~170 tok/s at 110k, 123 tok/s at 184k).
+    - Prompt reading slows with length (590 tok/s at 50 tokens, ~240 tok/s at 60k, ~170 tok/s at 110k, 123 tok/s at
+      184k).
+    - The first start downloads 6.0 GB more (`bfp8/` of this repo) inside the container, with no progress bar in
+      `tt-model serve`; `tt-model logs -f` shows it.
+    - `tt-model serve` refuses while any other container holds `/dev/tenstorrent` (tt-model's busy-chip check), even
+      an idle one; stop that service first.
+    - Greedy output can differ at a near-tie token between a cold request and one resumed from the prefix cache.
+    - Agents such as Claude Code ask for thinking on every turn; serve with `--thinking off` for faster agent turns.
+    - `P100A_Q36_FUSED=0` (a debug switch for the unfused gated-delta-net path) is broken; the default is unaffected.
